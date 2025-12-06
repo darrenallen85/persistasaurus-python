@@ -1,8 +1,8 @@
 """Example of a resumable workflow with error handling and recovery."""
 import asyncio
 import random
+import sys
 from pathlib import Path
-from typing import Optional
 
 from persistasaurus import (
     Database,
@@ -85,9 +85,19 @@ class DataPipelineWorkflow:
         if not execution:
             raise NotFoundError(f"Execution {execution_id} not found")
         
-        # Get the payload from the execution
+        # Get the initial payload from the execution
         import json
-        initial_payload = json.loads(execution.result) if execution.result else {}
+        
+        # Get initial payload - stored in the first completed step or execution result
+        rows = await self.db.fetch_all(
+            "SELECT payload FROM steps WHERE execution_id = ? AND step_index = 0 AND status = 'completed' LIMIT 1",
+            (execution_id,)
+        )
+        if rows and rows[0]['payload']:
+            initial_step = json.loads(rows[0]['payload'])
+            initial_payload = initial_step.get('result', {})
+        else:
+            initial_payload = {}
         
         # Find which steps are already completed
         completed_steps = await self._get_completed_steps(execution_id)
@@ -95,9 +105,14 @@ class DataPipelineWorkflow:
         
         if start_from > 0:
             print(f"\n📦 Resuming from step {start_from + 1}/{len(self.steps)}")
+            print(f"   Already completed: {start_from} step(s)")
         
-        # Execute remaining steps
+        # Accumulate data from previous completed steps
         accumulated_data = initial_payload.copy()
+        for step_row in completed_steps:
+            step_payload = json.loads(step_row['payload'])
+            if 'result' in step_payload:
+                accumulated_data.update(step_payload['result'])
         
         for idx in range(start_from, len(self.steps)):
             step_name, step_func = self.steps[idx]
@@ -182,43 +197,55 @@ async def main():
     await apply_migrations(db, migrations_dir)
     print("✓ Database initialized\n")
     
-    # Create initial execution
-    print("=" * 60)
-    print("Creating new data pipeline execution...")
-    print("=" * 60)
-    
-    execution_id = await create_execution(db, {
-        "input_file": "data/sales_2024.csv",
-        "config": {"batch_size": 100, "retry_count": 3}
-    })
-    print(f"✓ Created execution: {execution_id}\n")
+    # Check if execution_id was provided as argument
+    execution_id = None
+    if len(sys.argv) > 1:
+        execution_id = sys.argv[1]
+        print("=" * 60)
+        print(f"Resuming existing execution: {execution_id}")
+        print("=" * 60)
+        
+        # Verify it exists
+        existing = await get_execution(db, execution_id)
+        if not existing:
+            print(f"❌ Execution {execution_id} not found!")
+            await db.close()
+            return
+        
+        print(f"Current status: {existing.status}")
+        if existing.error:
+            print(f"Last error: {existing.error}")
+        print()
+    else:
+        # Create new execution
+        print("=" * 60)
+        print("Creating new data pipeline execution...")
+        print("=" * 60)
+        
+        execution_id = await create_execution(db, {
+            "input_file": "data/sales_2024.csv",
+            "config": {"batch_size": 100, "retry_count": 3}
+        })
+        print(f"✓ Created execution: {execution_id}")
+        print(f"\n💡 To resume this execution later, run:")
+        print(f"   python example_resumable_workflow.py {execution_id}\n")
     
     # Create workflow instance
     workflow = DataPipelineWorkflow(db)
     
-    # Attempt to execute (may fail and need retry)
-    max_retries = 5
-    attempt = 1
+    # Execute the workflow (try once, then stop to demonstrate resumption)
+    print(f"{'=' * 60}")
+    print("Executing workflow...")
+    print("=" * 60)
     
-    while attempt <= max_retries:
-        print(f"\n{'=' * 60}")
-        print(f"Attempt {attempt}/{max_retries}")
-        print("=" * 60)
-        
-        success = await workflow.execute(execution_id)
-        
-        if success:
-            break
-        
-        # If failed, wait and retry
-        if attempt < max_retries:
-            wait_time = 2 * attempt  # Exponential backoff
-            print(f"\n⏳ Waiting {wait_time}s before retry...")
-            await asyncio.sleep(wait_time)
-            attempt += 1
-        else:
-            print(f"\n❌ Failed after {max_retries} attempts")
-            break
+    success = await workflow.execute(execution_id)
+    
+    if success:
+        print(f"\n🎉 Workflow completed successfully!")
+    else:
+        print(f"\n❌ Workflow failed. Run the following to resume:")
+        print(f"   python example_resumable_workflow.py {execution_id}")
+        print(f"\nThe workflow will resume from the last successful step.")
     
     # Show final state
     print(f"\n{'=' * 60}")
