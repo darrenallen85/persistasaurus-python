@@ -1,0 +1,5 @@
+quart
+aiosqlite
+python-dotenv
+pytest
+pytest-asyncio
