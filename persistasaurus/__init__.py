@@ -10,6 +10,11 @@ from persistasaurus.engine import (
 )
 from persistasaurus.errors import PersistasaurusError, NotFoundError
 from persistasaurus.models import Execution, Step
+from persistasaurus.workflow import (
+    WorkflowContext,
+    durable_workflow,
+    start_workflow,
+)
 
 __all__ = [
     "Database",
@@ -23,4 +28,7 @@ __all__ = [
     "NotFoundError",
     "Execution",
     "Step",
+    "WorkflowContext",
+    "durable_workflow",
+    "start_workflow",
 ]

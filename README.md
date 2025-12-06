@@ -119,7 +119,7 @@ Response:
 
 ### Using the Library Directly
 
-**Simple example:**
+**Simple example (low-level API):**
 
 ```python
 import asyncio
@@ -167,19 +167,65 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-**Resumable workflow with error handling:**
+**High-level decorator API (recommended):**
 
-For a complete example showing how to build a fault-tolerant, resumable workflow that can recover from failures, see [`example_resumable_workflow.py`](example_resumable_workflow.py).
+```python
+from persistasaurus import Database, DatabaseConfig, durable_workflow, start_workflow, WorkflowContext
 
-This example demonstrates:
+db = Database(DatabaseConfig(sqlite_path="my_app.db"))
+await db.connect()
+
+@durable_workflow(db)
+async def process_order(ctx: WorkflowContext):
+    """Order processing workflow with automatic step tracking."""
+    
+    async with ctx.step("validate_order"):
+        result = await validate_order(ctx.state)
+        ctx.state.update(result)
+    
+    async with ctx.step("charge_payment"):
+        payment = await charge_payment(ctx.state)
+        ctx.state.update(payment)
+    
+    async with ctx.step("ship_order"):
+        shipping = await ship_order(ctx.state)
+        ctx.state.update(shipping)
+    
+    return ctx.state
+
+# Start the workflow
+execution_id = await start_workflow(db, process_order, {"order_id": "ORD-001"})
+
+# Resume a failed workflow
+await start_workflow(db, process_order, {"order_id": "ORD-001"}, execution_id=execution_id)
+```
+
+**Features of the decorator API:**
+- ✅ Automatic step tracking and persistence
+- ✅ Automatic state management via `ctx.state`
+- ✅ Automatic skip of completed steps on resume
+- ✅ Cleaner, more declarative syntax
+- ✅ Similar to Java persistasaurus `@DurableTask`
+
+**Complete examples:**
+
+For complete working examples, see:
+- [`example_decorator_workflow.py`](example_decorator_workflow.py) - High-level decorator API (recommended)
+- [`example_resumable_workflow.py`](example_resumable_workflow.py) - Low-level explicit API
+
+Both examples demonstrate:
 - Multi-step workflow execution
-- Automatic retry with exponential backoff
+- Automatic/manual retry with backoff
 - Resuming from the last successful step
 - Proper error tracking in the database
 - Complete audit trail of all attempts
 
-Run it with:
+Run them with:
 ```bash
+# Decorator-based (high-level)
+python example_decorator_workflow.py
+
+# Explicit API (low-level)
 python example_resumable_workflow.py
 ```
 
